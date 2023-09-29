@@ -11,7 +11,12 @@
 #include "utf8.h"
 #include "difflib.h"
 
-namespace util {
+#if defined(_WIN32)
+#include <io.h>
+#include <fcntl.h>
+#endif
+
+namespace utils {
     using namespace std;
 
     template<class T>
@@ -20,19 +25,37 @@ namespace util {
     template<>
     ostream& write<uint64_t>(ostream& os, const uint64_t& a)
     {
-        return os.write(reinterpret_cast<const char*>(&a), sizeof a);
+        os.write(reinterpret_cast<const char*>(&a), sizeof a);
+
+        if (os.fail()) {
+            throw runtime_error("Failed writing to output stream.");
+        }
+
+        return os;
     }
 
     template<>
     ostream& write<double>(ostream& os, const double& a)
     {
-        return os.write(reinterpret_cast<const char*>(&a), sizeof a);
+        os.write(reinterpret_cast<const char*>(&a), sizeof a);
+        
+        if (os.fail()) {
+            throw runtime_error("Failed writing to output stream.");
+        }
+
+        return os;
     }
 
     template<>
     ostream& write<string>(ostream& os, const string& a)
     {
-        return os.write(a.data(), a.size());
+        os.write(a.data(), a.size());
+
+        if (os.fail()) {
+            throw runtime_error("Failed writing to output stream.");
+        }
+
+        return os;
     }
 
     // TODO: static_assert(std::is_fundamental<T>::value, "T must be a fundamental type");
@@ -45,6 +68,10 @@ namespace util {
         uint64_t a;
         is.read(reinterpret_cast<char*>(&a), sizeof a);
 
+        if (is.fail()) {
+            throw runtime_error("Failed reading from input stream.");
+        }
+        
         return a;
     }
 
@@ -54,6 +81,10 @@ namespace util {
         double a;
         is.read(reinterpret_cast<char*>(&a), sizeof a);
 
+        if (is.fail()) {
+            throw runtime_error("Failed reading from input stream.");
+        }
+
         return a;
     }
 
@@ -62,6 +93,10 @@ namespace util {
         string s(count, '\00');
         is.read(s.data(), s.size());
 
+        if (is.fail()) {
+            throw runtime_error("Failed reading from input stream.");
+        }
+
         return s;
     }
 }
@@ -69,18 +104,18 @@ namespace util {
 namespace {
     using namespace std;
 
-    template <class Ratio>
-    class RatioVect: public vector<Ratio> {
+    template <class RatioType>
+    class RatioVect: public vector<RatioType> {
     public:
-        using vector<Ratio>::vector; // inherit all vector constructors
+        using vector<RatioType>::vector; // inherit all vector constructors
 
         string serialize() const
         {
             ostringstream oss;
             
-            util::write<uint64_t>(oss, this->size());
+            utils::write<uint64_t>(oss, this->size());
             for (const auto& ratio : *this)
-                util::write<Ratio>(oss, ratio);
+                utils::write<RatioType>(oss, ratio);
             
             return oss.str();
         }
@@ -91,9 +126,9 @@ namespace {
 
             istringstream iss(bin);
                     
-            size_t count = util::read_primitive<uint64_t>(iss);    
+            size_t count = utils::read_primitive<uint64_t>(iss);    
             while (count--) {
-                auto ratio = util::read_primitive<Ratio>(iss);
+                auto ratio = utils::read_primitive<RatioType>(iss);
                 ratios.push_back(ratio);
             }
 
@@ -131,10 +166,10 @@ namespace {
         {
             ostringstream oss;
 
-            util::write<uint64_t>(oss, size(couples));
+            utils::write<uint64_t>(oss, size(couples));
             for (const auto& [a, b] : couples) {
-                util::write<uint64_t>(oss, a);
-                util::write<uint64_t>(oss, b);
+                utils::write<uint64_t>(oss, a);
+                utils::write<uint64_t>(oss, b);
             }
 
             return oss.str();
@@ -176,10 +211,10 @@ namespace {
         static vector<Couple> deserialize_couples(istream& is)
         {
             vector<Couple> couples;        
-            size_t n_couples = util::read_primitive<uint64_t>(is);
+            size_t n_couples = utils::read_primitive<uint64_t>(is);
             while (n_couples--) {
-                const size_t a = util::read_primitive<uint64_t>(is);
-                const size_t b = util::read_primitive<uint64_t>(is);
+                const size_t a = utils::read_primitive<uint64_t>(is);
+                const size_t b = utils::read_primitive<uint64_t>(is);
                 
                 couples.push_back({a, b});
             }
@@ -190,11 +225,11 @@ namespace {
         static Order deserialize(const string& bin)
         {
             istringstream iss(bin);
+
+            auto contents = Order<T>::deserialize_contents(iss);
+            auto couples = Order<T>::deserialize_couples(iss);
             
-            return {
-                Order::deserialize_contents(iss),
-                Order::deserialize_couples(iss)
-            };
+            return { contents, couples };
         }
     private:
         vector<T> contents;
@@ -206,10 +241,10 @@ namespace {
     {
         vector<u32string> contents;
         
-        size_t n_contents = util::read_primitive<uint64_t>(iss);
+        size_t n_contents = utils::read_primitive<uint64_t>(iss);
         while (n_contents--) {
-            const size_t n_content = util::read_primitive<uint64_t>(iss);
-            const auto content_bin = util::read_bytes(iss, n_content);
+            const size_t n_content = utils::read_primitive<uint64_t>(iss);
+            const auto content_bin = utils::read_bytes(iss, n_content);
             const auto content = utf8::utf8to32(content_bin);
 
             contents.push_back(content);
@@ -223,12 +258,12 @@ namespace {
     {
         ostringstream oss;
 
-        util::write<uint64_t>(oss, size(contents));
+        utils::write<uint64_t>(oss, size(contents));
         for (const auto& content : contents) {
             const string content_bin = utf8::utf32to8(content);
 
-            util::write<uint64_t>(oss, size(content_bin));
-            util::write<string>(oss, content_bin);
+            utils::write<uint64_t>(oss, size(content_bin));
+            utils::write<string>(oss, content_bin);
         }
 
         return oss.str();
@@ -237,45 +272,75 @@ namespace {
 
 namespace {
     using namespace std;
+    
+    string read_from_file(const filesystem::path& path) {
+        if (!filesystem::exists(path)) {
+            throw runtime_error("File doesn't exist.");
+        }
 
-    string read_all_file(const filesystem::path& path) {
-        ostringstream buf;
+        ifstream input_file_stream(path, ios::binary);
 
-        ifstream ifs(path, ios::binary);
-        buf << ifs.rdbuf();
+        istreambuf_iterator<char> file_stream_it(input_file_stream);
+        istreambuf_iterator<char> end_of_stream_it;
+        string file_content(file_stream_it, end_of_stream_it);
 
-        return buf.str();
+        return file_content;
     }
 
     void write_to_file(const filesystem::path& path, const string& s) {
+        if (!filesystem::exists(path)) {
+            throw runtime_error("File doesn't exist.");
+        }
+        
         ofstream ofs(path, ios::binary);
-        ofs.write(s.data(), s.size());  
+        utils::write(ofs, s); 
     }
 
-    string read_all_stdin()
+    string read_from_stdin()
     {
+#if defined(_WIN32)
         // `stdin` is by default in text mode.
         // On Unix systems, there's no difference between the two.
         // On Windows the modes are different an we shall reopen the stream.
-        // freopen(nullptr, "rb", stdin);
-    
+        if (_setmode(_fileno(stdin), _O_BINARY) == -1) {
+            throw runtime_error("Unable to set stdin file mode to binary.");
+        }
+#endif
+        
         string s;
  
         char c;
-        while(cin.get(c))
+        while (cin.get(c)) {
             s.push_back(c);
-                
+        }
+
+#if defined(_WIN32)
+        if (_setmode(_fileno(stdin), _O_TEXT) == -1) {
+            throw runtime_error("Unable to set stdin file mode to text.");
+        }
+#endif
+
         return s;
     }
 
     void write_to_stdout(const string& s)
     {
+#if defined(_WIN32)
         // `stdin` is by default in text mode.
         // On Unix systems, there's no difference between the two.
         // On Windows the modes are different an we shall reopen the stream.
-        // freopen(nullptr, "wb", stdout);
+        if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+            throw runtime_error("Unable to set stdout file mode to binary.");
+        }
+#endif
 
-        util::write(cout, s); 
+        utils::write(cout, s);
+
+#if defined(_WIN32)
+        if (_setmode(_fileno(stdout), _O_TEXT) == -1) {
+            throw runtime_error("Unable to set stdout file mode to text.");
+        }
+#endif
     }
 }
 
@@ -284,10 +349,10 @@ namespace {
 #include <cassert>
 #include <chrono>
 
-void _general_test() {
+void __general_test__() {
     using namespace std::chrono;
 
-    auto serialized_order = read_all_file("./tmp/order.bin");
+    auto serialized_order = read_from_file("./.tmp/test/order.bin");
     auto order = Order<u32string>::deserialize(serialized_order);
 
     assert(serialized_order == order.serialize());
@@ -296,20 +361,20 @@ void _general_test() {
     auto ratios = order.execute();
     auto t2 = high_resolution_clock::now();
 
-    auto serialized_expected_ratios = read_all_file("./tmp/ratios_py.bin");
+    auto serialized_expected_ratios = read_from_file("./.tmp/test/ratios_py.bin");
     auto expected_ratios = RatioVect<double>::deserialize(serialized_expected_ratios);
 
     assert(ratios == expected_ratios);
     
     auto duration_ns = duration_cast<nanoseconds>(t2 - t1).count();
     auto duration = duration_ns / 1e9;
-    std::cout << duration << "s\n";    
+    std::cout << duration << " s\n";    
 }
 
 // =========================================
 
 void stdio_order_execution() {
-    auto serialized_order = read_all_stdin();
+    auto serialized_order = read_from_stdin();
     auto order = Order<u32string>::deserialize(serialized_order);
     auto ratios = order.execute();
     write_to_stdout(ratios.serialize());
@@ -317,4 +382,5 @@ void stdio_order_execution() {
 
 int main() {
     stdio_order_execution();
+    // __general_test__();
 }
