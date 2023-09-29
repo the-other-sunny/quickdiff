@@ -1,5 +1,7 @@
 from __future__ import annotations
-from typing import Callable, TypeVar, Optional
+from typing import Callable, TypeVar, Optional, ClassVar
+from dataclasses import dataclass
+import io
 import struct
 import difflib
 
@@ -12,57 +14,59 @@ def ratio(a: str, b: str) -> float:
     return difflib.SequenceMatcher(a=a, b=b).ratio()
 
 def int_to_uint64(a: int) -> bytes:
-    return struct.pack('L', a) # TODO: 'L' or 'Q' ?
+    return struct.pack('=Q', a) # TODO: 'L' or 'Q' ?
 
 def uint64_to_int(b: bytes) -> int:
     assert len(b) == UINT64_SIZE
 
-    return struct.unpack('L', b)[0]
+    return struct.unpack('=Q', b)[0]
 
 def float_to_double(f: float) -> bytes:
-    return struct.pack('d', f)
+    return struct.pack('=d', f)
 
 def double_to_float(b: bytes) -> float:
     assert len(b) == DOUBLE_SIZE
 
-    return struct.unpack('d', b)[0]
+    return struct.unpack('=d', b)[0]
 
 def read_and_parse(
-    bin: bytes,
+    buff: io.BufferedIOBase,
     n: int,
     parse_fn: Callable[[bytes], T]
 ) -> tuple[T, bytes]:
-    chunk, bin = bin[:n], bin[n:]
-    
-    return parse_fn(chunk), bin
+    chunk = buff.read(n)
+    assert len(chunk) == n
+    return parse_fn(chunk)
 
 class RatioList(list):
     def serialize(self) -> bytes:
-        bin = bytearray()
+        buff = io.BytesIO()
+        
         n_ratios = len(self)
-        bin.extend(int_to_uint64(n_ratios))
+        buff.write(int_to_uint64(n_ratios))
         for ratio in self:
-            bin.extend(float_to_double(ratio))
+            buff.write(float_to_double(ratio))
+        
+        buff.seek(0)
+        return buff.read()
 
-        return bytes(bin)
-    
     @staticmethod
     def deserialize(bin: bytes) -> RatioList:
-        n_ratios, bin = read_and_parse(bin, UINT64_SIZE, uint64_to_int)
+        buff = io.BytesIO(bin)
+        n_ratios = read_and_parse(buff, UINT64_SIZE, uint64_to_int)
         ratios = RatioList()
-        for i in range(n_ratios):
-            ratio, bin = read_and_parse(bin, DOUBLE_SIZE, double_to_float)
+        for _ in range(n_ratios):
+            ratio = read_and_parse(buff, DOUBLE_SIZE, double_to_float)
             ratios.append(ratio)
         
         return ratios
 
+@dataclass
 class Order:
-    _DefaultDeserializer = None # Initialized later
-    _DefaultSerializer = None # Initialized later
-
-    def __init__(self, contents: list[str], couples: list[tuple[int, int]]):
-        self.contents = contents
-        self.couples = couples
+    _DefaultDeserializer: ClassVar[Callable[[bytes], Order]] = None # Initialized later
+    _DefaultSerializer: ClassVar[Callable[[Order], bytes]] = None # Initialized later
+    contents: list[str]
+    couples: list[tuple[int, int]]
 
     def serialize(
         self,
@@ -99,53 +103,56 @@ class Order:
     def __eq__(self, other) -> bool:    
         return self.contents == other.contents and self.couples == other.couples
 
-class Deserializer:
+# using class as a namespace
+class OrderDeserializer:
     @staticmethod
     def deserialize(bin: bytes) -> Order:
+        buff = io.BytesIO(bin)
+
         contents = []
-        n_contents, bin = read_and_parse(bin, UINT64_SIZE, uint64_to_int)
-        for i in range(n_contents):
-            n_content_bin, bin = read_and_parse(bin, UINT64_SIZE, uint64_to_int)
-            content, bin = read_and_parse(
-                bin, n_content_bin, lambda b: b.decode()
+        n_contents = read_and_parse(buff, UINT64_SIZE, uint64_to_int)
+        for _ in range(n_contents):
+            n_content_bin = read_and_parse(buff, UINT64_SIZE, uint64_to_int)
+            content = read_and_parse(
+                buff, n_content_bin, lambda b: b.decode()
             )
             contents.append(content)
         
         couples = []
-        n_couples, bin = read_and_parse(bin, UINT64_SIZE, uint64_to_int)
-        for i in range(n_couples):
-            a, bin = read_and_parse(bin, UINT64_SIZE, uint64_to_int)
-            b, bin = read_and_parse(bin, UINT64_SIZE, uint64_to_int)
+        n_couples = read_and_parse(buff, UINT64_SIZE, uint64_to_int)
+        for _ in range(n_couples):
+            a = read_and_parse(buff, UINT64_SIZE, uint64_to_int)
+            b = read_and_parse(buff, UINT64_SIZE, uint64_to_int)
             couples.append((a, b))
         
-        assert len(bin) == 0
+        assert len(buff.read()) == 0
 
         return Order(contents, couples)
 
-class Serializer:
+# using class as a namespace
+class OrderSerializer:
     @staticmethod
     def serialize(order: Order) -> bytes:
-        bin = bytearray()
+        buff = io.BytesIO()
 
         n_contents = len(order.contents)
-        bin.extend(int_to_uint64(n_contents))
-        
+        buff.write(int_to_uint64(n_contents))
         for content in order.contents:
             content_bin = content.encode('utf-8')
             n_bin = len(content_bin)
 
-            bin.extend(int_to_uint64(n_bin))
-            bin.extend(content_bin)
+            buff.write(int_to_uint64(n_bin))
+            buff.write(content_bin)
 
         n_couples = len(order.couples)
-        bin.extend(int_to_uint64(n_couples))
-
+        buff.write(int_to_uint64(n_couples))
         for couple in order.couples:
             a, b = couple
-            bin.extend(int_to_uint64(a))
-            bin.extend(int_to_uint64(b))
+            buff.write(int_to_uint64(a))
+            buff.write(int_to_uint64(b))
         
-        return bytes(bin)
+        buff.seek(0)
+        return buff.read()
 
-Order._DefaultSerializer = Serializer.serialize
-Order._DefaultDeserializer = Deserializer.deserialize
+Order._DefaultSerializer = OrderSerializer.serialize
+Order._DefaultDeserializer = OrderDeserializer.deserialize
